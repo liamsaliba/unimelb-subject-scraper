@@ -1,5 +1,4 @@
 import scrapy
-disable_honours = True
 
 class SubjectsSpider(scrapy.Spider):
 	name = 'subjects'
@@ -7,22 +6,21 @@ class SubjectsSpider(scrapy.Spider):
 	#start_urls = ['https://handbook.unimelb.edu.au/subjects/undergraduate']
 	#start_urls = ['https://handbook.unimelb.edu.au/breadth-search?course=B-SCI']
 	start_urls = ['https://handbook.unimelb.edu.au/subjects/']
-	count = 0
+	parse_count = 0
+	total_count = 0
 
 	def parse_requirements(self, response):
 		data = response.meta['data']
-		main = response.css('div.course__body').xpath('./*')
+		# handle prerequisites
+		prereq = response.css("#prerequisites > *")[1:]
+		
+		# handle corequisites, non-allowed subjects, recommended background knowledge
+		# Take each element of the body, except the title and 'core participation req.' stuff
+		body = response.css('div.course__body > *')[2:-4]
 		current = ""
-		for el in main:
-			text = el.css('::text').extract_first()
-			if text is not None:
-				text = text.strip()
-			if text == 'Eligibility and requirements': # begin info
-				continue
-			elif text == "Core participation requirements": # end of info
-				break
-			elif text == "Prerequisites": # has its own div .. for some reason!!
-				current = "Prerequisites"
+		for element in body:
+			text = element.css('::text').extract_first()
+			if text == "Prerequisites": # has its own div .. for some reason!!
 				data[current] = []
 				for child in el.xpath('./*'): # go through each child in prereq div
 					found = False
@@ -54,50 +52,57 @@ class SubjectsSpider(scrapy.Spider):
 					continue
 				data[current].append(el.xpath('string(.)').extract_first().strip()) #normal handle
 		yield data
-
+		
 	def parse_subject(self, response):
 		data = response.meta['data']
-		data['credit'] = response.css('p.header--course-and-subject__details span ::text').extract()[1].split("Points: ")[1]
-		print(data['credit'])
-
+		data['weight'] = response.css('p.header--course-and-subject__details span ::text').extract()[1].split("Points: ")[1]
+		# Parse infobox
 		for line in response.css('div.course__overview-box tr'):
-			name = line.css('th ::text').extract_first()
-			entry = line.css('td').xpath("string(.)").extract_first()
-			# we don't care about Honours subjects at the moment.
-			if disable_honours and name == "Subject level" and entry == "Honours":
-				yield '' # this will just make an error, that's ok, it removes it from the output
-				return
-			if name == 'Availability':
-				data[name] = []
-				for label in line.xpath('.//td/div'):
-					data[name].append(label.css("::text").extract_first())
-			elif name in ["Campus", "Subject level"]:
-				data[name] = entry
-		print("Parsing [{}] {}".format(data['code'], data['title']))
+			field = line.css('th ::text').extract_first()
+			value = line.css('td').xpath("string(.)").extract_first()
+			if field == 'Availability':
+				data[field] = [label.css("::text").extract_first() for label in line.xpath('.//td/div')]
+			elif field == 'Fees' or field == "Year of offer"
+				# skip
+				pass
+			else 
+				data[field] = value
+		# Parse overview paragraphs
+		data['overview'] = response.css(".course__overview-wrapper p::text").extract_first();
+		data['learning-outcomes'] = [x[:-1] for x in response.css("#learning-outcomes .ticked-list li ::text").extract()];
+		data['skills'] = [x[:-1] for x in response.css("#generic-skills .ticked-list li ::text").extract()];
+		# Get 'last updated' from page
+		data['updated'] = response.css(".last-updated ::text").extract_first()[14:]
 		yield scrapy.Request(
-			response.urljoin(data["href"] + '/eligibility-and-requirements'),
+			response.urljoin(data["url"] + '/eligibility-and-requirements'),
 			callback=self.parse_requirements,
 			meta={'data': data}
 		)
-
+	# parses results page, list of subjects
 	def parse(self, response):
 		# follow links to subject pages
 		for result in response.css('li.search-results__accordion-item'):
-			data = {}
+			total_count += 1
+			# skip if subject is not offered.
 			offered = result.css('span.search-results__accordion-detail ::text').extract()[1]
-			if ("Not offered" in offered): #skip!
+			if ("Not offered in" in offered):
 				continue
-			data['title'] = result.css('a.search-results__accordion-title ::text').extract_first()
+			parse_count += 1
+			data = {}
+			data['no_total'] = total_count
+			data['no'] = parse_count
+			data['name'] = result.css('a.search-results__accordion-title ::text').extract_first()
 			data['code'] = result.css('span.search-results__accordion-code ::text').extract_first()
-			data['href'] = result.css('a.search-results__accordion-title ::attr(href)').extract_first()
+			data['url'] = result.css('a.search-results__accordion-title ::attr(href)').extract_first()
+			print("Parsing [p{}t{}] {} ({})".format(parse_count, total_count, data['title'], data['code']))
 
 			yield scrapy.Request(
-					response.urljoin(data['href']),
+					response.urljoin(data['url']),
 					callback=self.parse_subject,
 					meta={'data': data}
 				)
 
-	# follow pagnation links
+		# follow pagination links to next list of subjects
 		next_page = response.css('span.next a ::attr(href)').extract_first()
 		if next_page is not None:
 			yield response.follow(next_page, self.parse)
