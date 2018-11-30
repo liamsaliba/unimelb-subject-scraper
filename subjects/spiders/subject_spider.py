@@ -39,23 +39,37 @@ class SubjectsSpider(scrapy.Spider):
 	
 	def parse_date_info(self, response):
 		data = response.meta['data']
-
+		dates = []
+		accordion = response.css(".accordion > li")
+		for semester in accordion:
+			period = {"Name" : semester.css(".accordion__title::text").extract()}
+			for row in semester.css("tr"):
+				# populate rows
+				a = row.css("::text").extract()
+				period[a[0]] = a[1]
+			period["Contact Details"] = period.css(".course__body__inner__contact_details > *").extract()
+			dates.append(period)
+		data["Dates"] = dates
+		data["Additional Delivery Details"]
+		
+		self.parsed_count += 1
+		print("[{:4d}/{:4d}/{:4d}] (-) Parsed  ({:4d}) {}  {}".format(self.parsed_count, self.parse_count, self.total_count, data['Parse No.'], data['Code'], data['Name']))
 		yield data
 
 	def parse_assessment(self, response):
 		data = response.meta['data']
 		assessment = {}
 		table = response.css(".assessment-table tr")
-		assessment["assessments"] = []
+		assessment["Assessments"] = []
 		if len(table) != 0:
 			for row in table[1:]:
 				current = {}
 				a = row.css("td")[0].css("li::text").extract()
-				current["name"] = a[0].strip()
-				current["info"] = a[1:]
+				current["Name"] = a[0].strip()
+				current["Info"] = a[1:]
 				a = row.css("td::text").extract()
-				current["timing"] = a[0]
-				current["weight"] = a[1]
+				current["Timing"] = a[0]
+				current["Weight"] = a[1]
 		description_body = response.css(".assessment-description > *")
 		if len(description_body) != 0:
 			description = []
@@ -63,13 +77,14 @@ class SubjectsSpider(scrapy.Spider):
 				string = parse_element(element)
 				if string is not None:
 					description.append(string)
-			assessment["description"] = description
-		data["assessment"] = assessment
+			assessment["Description"] = description
+		data["Assessment"] = assessment
 		
-		self.parsed_count += 1
-		print("[{:4d}/{:4d}/{:4d}] (-) Parsed  ({:4d}) {}  {}".format(self.parsed_count, self.parse_count, self.total_count, data['no'], data['code'], data['name']))
-
-		yield data
+		yield scrapy.Request(
+			response.urljoin(data["url"] + '/dates-times'),
+			callback=self.parse_date_info,
+			meta={'data': data}
+		)
 
 	def parse_requirements(self, response):
 		data = response.meta['data']
@@ -90,14 +105,16 @@ class SubjectsSpider(scrapy.Spider):
 		section_name = ""
 		for element in body:
 			extracted = element.extract()
+			# line is a heading line -- next heading
 			if extracted[:3] == "<h3":
 				section_name = element.css("::text").extract_first()
 				requirements[section_name] = []
 				continue
 			parsed = parse_element_with_subject_table(element)
+			# Don't append if None, leave it blank
 			if parsed is not None:
 				requirements[section_name].append(parsed)
-		data["requirements"] = requirements
+		data["Requirements"] = requirements
 		yield scrapy.Request(
 			response.urljoin(data["url"] + '/assessment'),
 			callback=self.parse_assessment,
@@ -106,7 +123,7 @@ class SubjectsSpider(scrapy.Spider):
 		
 	def parse_subject(self, response):
 		data = response.meta['data']
-		data['weight'] = response.css('p.header--course-and-subject__details span ::text').extract()[1].split("Points: ")[1]
+		data['Weight'] = response.css('p.header--course-and-subject__details span ::text').extract()[1].split("Points: ")[1]
 		# Parse infobox
 		for line in response.css('div.course__overview-box tr'):
 			field = line.css('th ::text').extract_first()
@@ -119,9 +136,10 @@ class SubjectsSpider(scrapy.Spider):
 			else:
 				data[field] = value
 		# Parse overview paragraphs
-		data['overview'] = response.css(".course__overview-wrapper > p").xpath("string(.)").extract()
-		data['learning-outcomes'] = response.css("#learning-outcomes .ticked-list li ::text").extract()
-		data['skills'] = response.css("#generic-skills .ticked-list li ::text").extract()
+		data['Info'] = {}
+		data['Info']['Overview'] = response.css(".course__overview-wrapper > p").xpath("string(.)").extract()
+		data['Info']['Learning Outcomes'] = [x.strip(' \n,.;') for x in response.css("#learning-outcomes .ticked-list li ::text").extract()]
+		data['Info']['Skills'] = [x.strip(' \n,.;') for x in response.css("#generic-skills .ticked-list li ::text").extract()]
 		# Get 'last updated' from page
 		data['updated'] = response.css(".last-updated ::text").extract_first()[14:]
 		yield scrapy.Request(
@@ -140,12 +158,12 @@ class SubjectsSpider(scrapy.Spider):
 				continue
 			self.parse_count += 1
 			data = {}
-			data['no_total'] = self.total_count
-			data['no'] = self.parse_count
-			data['name'] = result.css('a.search-results__accordion-title ::text').extract_first()
-			data['code'] = result.css('span.search-results__accordion-code ::text').extract_first()
+			data['Item No.'] = self.total_count
+			data['Parse No.'] = self.parse_count
+			data['Name'] = result.css('a.search-results__accordion-title ::text').extract_first()
+			data['Code'] = result.css('span.search-results__accordion-code ::text').extract_first()
 			data['url'] = result.css('a.search-results__accordion-title ::attr(href)').extract_first()
-			print("[{:4d}/{:4d}/{:4d}] (+) Parsing ({:4d}) {}  {}".format(self.parsed_count, self.parse_count, self.total_count, data['no'], data['code'], data['name']))
+			print("[{:4d}/{:4d}/{:4d}] (+) Parsing ({:4d}) {}  {}".format(self.parsed_count, self.parse_count, self.total_count, data['Parse No.'], data['Code'], data['Name']))
 
 			yield scrapy.Request(
 					response.urljoin(data['url']),
