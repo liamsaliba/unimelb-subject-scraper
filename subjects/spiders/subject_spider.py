@@ -1,5 +1,8 @@
 import scrapy	
 
+def remove_blanks(l):
+	return [x for x in l if x != ""]
+
 def parse_element(element):
 	""" Function can return None, be careful!"""
 	# traverse list (if element is one)
@@ -37,8 +40,35 @@ class SubjectsSpider(scrapy.Spider):
 	parsed_count = 0
 	total_count = 0
 	
+	def parse_further_info(self, response):
+		data = response.meta['data']
+		further_information = {}
+		further_information['Texts'] = response.css(".texts accordion__hidden > * ::text").extract()
+		further_information['Notes'] = response.css(".notes accordion__hidden > * ::text").extract()
+		# Related
+		related = []
+		for row in response.css(".related tbody tr"):
+			item = {}
+			temp = row.css("td ::text").extract()
+			item["type"] = temp[0]
+			item["name"] = temp[1]
+			item["href"] = row.css("a ::attr(href)").extract_first()
+			related.append(item)
+		further_information['Related'] = related
+		# Breadth
+		breadth = response.css(".breadth li a::text").extract()
+
+
+
+		data["Further Information"] = further_information
+		# Logging
+		self.parsed_count += 1
+		print("[{:4d}/{:4d}/{:4d}] (-) Parsed  ({:4d}) {}  {}".format(self.parsed_count, self.parse_count, self.total_count, data['Parse No.'], data['Code'], data['Name']))
+		yield data
+
 	def parse_date_info(self, response):
 		data = response.meta['data']
+		# Dates
 		dates = []
 		accordion = response.css(".accordion > li")
 		for semester in accordion:
@@ -46,15 +76,23 @@ class SubjectsSpider(scrapy.Spider):
 			for row in semester.css("tr"):
 				# populate rows
 				a = row.css("::text").extract()
-				period[a[0]] = a[1]
-			period["Contact Details"] = period.css(".course__body__inner__contact_details > *").extract()
+				period[a[0]] = a[1] if len(a) > 1 else None
+			period["Contact Details"] = semester.css(".course__body__inner__contact_details > *").extract()
 			dates.append(period)
 		data["Dates"] = dates
-		data["Additional Delivery Details"]
+		# Additional Delivery Details
+		a = response.css("course__body > *")
+		temp = []
+		if len(a) > 5:
+			for line in a[5:-1]:
+				temp.append(line.xpath("string(.)"))
+		data["Additional Delivery Details"] = temp
 		
-		self.parsed_count += 1
-		print("[{:4d}/{:4d}/{:4d}] (-) Parsed  ({:4d}) {}  {}".format(self.parsed_count, self.parse_count, self.total_count, data['Parse No.'], data['Code'], data['Name']))
-		yield data
+		yield scrapy.Request(
+			response.urljoin(data["url"] + '/further-information'),
+			callback=self.parse_further_info,
+			meta={'data': data}
+		)
 
 	def parse_assessment(self, response):
 		data = response.meta['data']
@@ -137,9 +175,9 @@ class SubjectsSpider(scrapy.Spider):
 				data[field] = value
 		# Parse overview paragraphs
 		data['Info'] = {}
-		data['Info']['Overview'] = response.css(".course__overview-wrapper > p").xpath("string(.)").extract()
-		data['Info']['Learning Outcomes'] = [x.strip(' \n,.;') for x in response.css("#learning-outcomes .ticked-list li ::text").extract()]
-		data['Info']['Skills'] = [x.strip(' \n,.;') for x in response.css("#generic-skills .ticked-list li ::text").extract()]
+		data['Info']['Overview'] = remove_blanks([x.strip(' \n') for x in response.css(".course__overview-wrapper > p").xpath("string(.)").extract()])
+		data['Info']['Learning Outcomes'] = remove_blanks([x.strip(' \n,.;') for x in response.css("#learning-outcomes .ticked-list li ::text").extract()])
+		data['Info']['Skills'] = remove_blanks([x.strip(' \n,.;') for x in response.css("#generic-skills .ticked-list li ::text").extract()])
 		# Get 'last updated' from page
 		data['updated'] = response.css(".last-updated ::text").extract_first()[14:]
 		yield scrapy.Request(
