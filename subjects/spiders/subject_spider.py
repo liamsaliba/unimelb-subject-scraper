@@ -1,4 +1,5 @@
 import scrapy	
+import datetime
 
 def remove_blanks(l):
 	return [x for x in l if x != ""]
@@ -40,11 +41,32 @@ class SubjectsSpider(scrapy.Spider):
 	parsed_count = 0
 	total_count = 0
 	
+	def log(self, data, step, lv='*'):
+		print("{} [{:4d}/{:4d}/{:4d}] ({}) Parse {:5} ({:4d}) {}  {}".format(datetime.datetime.now().isoformat(' '), self.parsed_count, self.parse_count, self.total_count, lv, step, data['Parse No.'], data['Code'], data['Name']))
+
+
+	def parse_timetable(self, response):
+		data = response.meta['data']
+		timetable = {}
+
+		periods = [x.strip("\n\t ").split("\xa0")[0][9:] for x in response.css("div h3")]
+
+		for table in response.css("div table"):
+			
+
+		data['Timetable'] = timetable
+
+		# Logging
+		self.parsed_count += 1
+		self.log(data, "done", '-')
+		data["Parsed No."] = self.parsed_count
+		yield data
+
 	def parse_further_info(self, response):
 		data = response.meta['data']
 		further_information = {}
-		further_information['Texts'] = response.css(".texts accordion__hidden > * ::text").extract()
-		further_information['Notes'] = response.css(".notes accordion__hidden > * ::text").extract()
+		further_information['Texts'] = response.css(".texts .accordion__hidden > *:nth-child(n+2) ::text").extract()
+		further_information['Notes'] = response.css(".notes .accordion__hidden > * ::text").extract()
 		# Related
 		related = []
 		for row in response.css(".related tbody tr"):
@@ -56,20 +78,26 @@ class SubjectsSpider(scrapy.Spider):
 			related.append(item)
 		further_information['Related'] = related
 		# Breadth
-		breadth = response.css(".breadth li a::text").extract()
+		further_information['Breadth'] = response.css(".breadth li a::text").extract()
 
-
+		further_information['Community Access Program'] = len(response.css(".community-access")) > 0
+		further_information['Exchange/Study Abroad'] = len(response.css(".mobility-students")) > 0
 
 		data["Further Information"] = further_information
-		# Logging
-		self.parsed_count += 1
-		print("[{:4d}/{:4d}/{:4d}] (-) Parsed  ({:4d}) {}  {}".format(self.parsed_count, self.parse_count, self.total_count, data['Parse No.'], data['Code'], data['Name']))
-		yield data
+
+		self.log(data, "furth")
+
+		yield scrapy.Request(
+			response.urljoin("https://sws.unimelb.edu.au/2019/Reports/List.aspx?objects=" + data['Code'] + "&weeks=1-52&days=1-7&periods=1-56&template=module_by_group_list"),
+			callback=self.parse_timetable,
+			meta={'data': data}
+		)
 
 	def parse_date_info(self, response):
 		data = response.meta['data']
 		# Dates
 		dates = []
+
 		accordion = response.css(".accordion > li")
 		for semester in accordion:
 			period = {"Name" : semester.css(".accordion__title::text").extract()}
@@ -77,7 +105,7 @@ class SubjectsSpider(scrapy.Spider):
 				# populate rows
 				a = row.css("::text").extract()
 				period[a[0]] = a[1] if len(a) > 1 else None
-			period["Contact Details"] = semester.css(".course__body__inner__contact_details > *").extract()
+			period["Contact Details"] = [x.strip(" \n\r") for x in semester.css(".course__body__inner__contact_details > *").xpath("string(.)").extract()]
 			dates.append(period)
 		data["Dates"] = dates
 		# Additional Delivery Details
@@ -88,6 +116,8 @@ class SubjectsSpider(scrapy.Spider):
 				temp.append(line.xpath("string(.)"))
 		data["Additional Delivery Details"] = temp
 		
+		self.log(data, "date")
+
 		yield scrapy.Request(
 			response.urljoin(data["url"] + '/further-information'),
 			callback=self.parse_further_info,
@@ -103,7 +133,7 @@ class SubjectsSpider(scrapy.Spider):
 			for row in table[1:]:
 				current = {}
 				a = row.css("td")[0].css("li::text").extract()
-				current["Name"] = a[0].strip()
+				current["Name"] = a[0]
 				current["Info"] = a[1:]
 				a = row.css("td::text").extract()
 				current["Timing"] = a[0]
@@ -118,6 +148,8 @@ class SubjectsSpider(scrapy.Spider):
 			assessment["Description"] = description
 		data["Assessment"] = assessment
 		
+		self.log(data, "assmt")
+
 		yield scrapy.Request(
 			response.urljoin(data["url"] + '/dates-times'),
 			callback=self.parse_date_info,
@@ -153,6 +185,8 @@ class SubjectsSpider(scrapy.Spider):
 			if parsed is not None:
 				requirements[section_name].append(parsed)
 		data["Requirements"] = requirements
+
+		self.log(data, "reqir")
 		yield scrapy.Request(
 			response.urljoin(data["url"] + '/assessment'),
 			callback=self.parse_assessment,
@@ -175,11 +209,14 @@ class SubjectsSpider(scrapy.Spider):
 				data[field] = value
 		# Parse overview paragraphs
 		data['Info'] = {}
-		data['Info']['Overview'] = remove_blanks([x.strip(' \n') for x in response.css(".course__overview-wrapper > p").xpath("string(.)").extract()])
-		data['Info']['Learning Outcomes'] = remove_blanks([x.strip(' \n,.;') for x in response.css("#learning-outcomes .ticked-list li ::text").extract()])
-		data['Info']['Skills'] = remove_blanks([x.strip(' \n,.;') for x in response.css("#generic-skills .ticked-list li ::text").extract()])
+		data['Info']['Overview'] = remove_blanks([x.strip(' \n\r') for x in response.css(".course__overview-wrapper > p").xpath("string(.)").extract()])
+		data['Info']['Learning Outcomes'] = remove_blanks([x.strip(' \n\r,.;') for x in response.css("#learning-outcomes .ticked-list li ::text").extract()])
+		data['Info']['Skills'] = remove_blanks([x.strip(' \n\r,.;') for x in response.css("#generic-skills .ticked-list li ::text").extract()])
 		# Get 'last updated' from page
-		data['updated'] = response.css(".last-updated ::text").extract_first()[14:]
+		data['Updated'] = response.css(".last-updated ::text").extract_first()[14:]
+
+		self.log(data, "subjt")
+
 		yield scrapy.Request(
 			response.urljoin(data["url"] + '/eligibility-and-requirements'),
 			callback=self.parse_requirements,
@@ -201,7 +238,7 @@ class SubjectsSpider(scrapy.Spider):
 			data['Name'] = result.css('a.search-results__accordion-title ::text').extract_first()
 			data['Code'] = result.css('span.search-results__accordion-code ::text').extract_first()
 			data['url'] = result.css('a.search-results__accordion-title ::attr(href)').extract_first()
-			print("[{:4d}/{:4d}/{:4d}] (+) Parsing ({:4d}) {}  {}".format(self.parsed_count, self.parse_count, self.total_count, data['Parse No.'], data['Code'], data['Name']))
+			self.log(data, "start", '+')
 
 			yield scrapy.Request(
 					response.urljoin(data['url']),
@@ -211,6 +248,8 @@ class SubjectsSpider(scrapy.Spider):
 
 		# follow pagination links to next list of subjects
 		next_page = response.css('span.next a ::attr(href)').extract_first()
+		if next_page[-1] == '4':
+			return
 		if next_page is not None:
 			print("Page exhausted. Navigate to", next_page)
 			yield response.follow(next_page, self.parse)
