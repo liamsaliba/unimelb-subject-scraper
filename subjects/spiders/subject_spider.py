@@ -33,13 +33,11 @@ def parse_element_with_subject_table(element):
 
 class SubjectsSpider(scrapy.Spider):
 	name = 'subjects'
-	#start_urls = ['https://handbook.unimelb.edu.au/search?query=&year=2018&types%5B%5D=subject&level_type%5B%5D=undergraduate&study_periods%5B%5D=semester_1&study_periods%5B%5D=semester_2&study_periods%5B%5D=summer_term&study_periods%5B%5D=winter_term&study_periods%5B%5D=year_long&area_of_study=all&faculty=all&department=all']
-	#start_urls = ['https://handbook.unimelb.edu.au/subjects/undergraduate']
-	#start_urls = ['https://handbook.unimelb.edu.au/breadth-search?course=B-SCI']
 	start_urls = ['https://handbook.unimelb.edu.au/subjects/']
 	parse_count = 0
 	parsed_count = 0
 	total_count = 0
+	period_store = []
 	
 	def log(self, data, step, lv='*'):
 		print("{} [{:4d}/{:4d}/{:4d}] ({}) Parse {:5} ({:4d}) {}  {}".format(datetime.datetime.now().isoformat(' '), self.parsed_count, self.parse_count, self.total_count, lv, step, data['Parse No.'], data['Code'], data['Name']))
@@ -48,11 +46,10 @@ class SubjectsSpider(scrapy.Spider):
 	def parse_timetable(self, response):
 		data = response.meta['data']
 		timetable = {}
+		tables = response.css("div table")
+		for period in [x.strip("\n\t ").split("\xa0")[0][9:] for x in response.css("div h3")]:
 
-		periods = [x.strip("\n\t ").split("\xa0")[0][9:] for x in response.css("div h3")]
 
-		for table in response.css("div table"):
-			
 
 		data['Timetable'] = timetable
 
@@ -195,7 +192,15 @@ class SubjectsSpider(scrapy.Spider):
 		
 	def parse_subject(self, response):
 		data = response.meta['data']
-		data['Weight'] = response.css('p.header--course-and-subject__details span ::text').extract()[1].split("Points: ")[1]
+		
+		head = response.css('p.header--course-and-subject__details ::text').extract()
+		data['Level'] = head[0]
+		if len(head) == 3:
+			data['Weight'] = head[1][8:] 
+			data['Location'] = head[2]
+		else:
+			data['Location'] = head[1]
+
 		# Parse infobox
 		for line in response.css('div.course__overview-box tr'):
 			field = line.css('th ::text').extract_first()
@@ -203,9 +208,7 @@ class SubjectsSpider(scrapy.Spider):
 			if field == 'Availability':
 				data[field] = [label.css("::text").extract_first() for label in line.xpath('.//td/div')]
 			# don't parse these
-			elif field == 'Fees' or field == "Year of offer" or field == "Subject code":
-				pass
-			else:
+			elif field == 'Year of offer'
 				data[field] = value
 		# Parse overview paragraphs
 		data['Info'] = {}
