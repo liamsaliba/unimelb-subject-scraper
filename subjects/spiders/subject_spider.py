@@ -1,6 +1,8 @@
 import scrapy	
 import datetime
 
+TT_COL_NAMES = ['Class Code', 'Description', 'Day', 'Start', 'Finish', 'Duration', 'Weeks', 'Location', 'Class Dates', 'Start Date']
+
 def remove_blanks(l):
 	return [x for x in l if x != ""]
 
@@ -46,10 +48,28 @@ class SubjectsSpider(scrapy.Spider):
 	def parse_timetable(self, response):
 		data = response.meta['data']
 		timetable = {}
-		tables = response.css("div table")
-		for period in [x.strip("\n\t ").split("\xa0")[0][9:] for x in response.css("div h3")]:
+		# gives COMP20007/U/1/SM1
+		period_names = [x.strip("\n\t ").split("\xa0")[0][9:] for x in response.css("div h3 ::text").extract()]
+		tables = response.css("table.cyon_table")
+		for i, table in enumerate(tables):
+			print(period_names[i])
+			parts = period_names[i].split("/")
+			# Wondering if it's possible to not have those values ...
+			# parts[1] shows the campus (U = Parkville)
+			if parts[2] != "1":
+				print("DEBUG: Period end not 1  !!")
 
-
+			sem = parts[3]
+			
+			events = []
+			for row in table.css("tbody tr"):
+				# values within row
+				values = row.css("td ::text").extract()
+				# convert to dictionary
+				event = dict([TT_COL_NAMES[i], values[i]] for i in range(len(TT_COL_NAMES)))
+				event["Subject Name"] = data["Name"]
+				events.append(event)
+			timetable[sem] = events
 
 		data['Timetable'] = timetable
 
@@ -57,6 +77,7 @@ class SubjectsSpider(scrapy.Spider):
 		self.parsed_count += 1
 		self.log(data, "done", '-')
 		data["Parsed No."] = self.parsed_count
+
 		yield data
 
 	def parse_further_info(self, response):
@@ -194,21 +215,32 @@ class SubjectsSpider(scrapy.Spider):
 		data = response.meta['data']
 		
 		head = response.css('p.header--course-and-subject__details ::text').extract()
+		infobox = response.css('div.course__overview-box tr')
+
+		# Will be "Undergraduate Level #", 
 		data['Level'] = head[0]
+
+		# Most Subjects ...
 		if len(head) == 3:
 			data['Weight'] = head[1][8:] 
 			data['Location'] = head[2]
+		# Doctorate time-based research
 		else:
 			data['Location'] = head[1]
+			# Maximum EFTSL to complete
+			# "Equivalent Full Time Study Load"
+			# TODO: Worry about PhD
+			yield data
+			return
 
 		# Parse infobox
-		for line in response.css('div.course__overview-box tr'):
+		for line in infobox:
 			field = line.css('th ::text').extract_first()
 			value = line.css('td').xpath("string(.)").extract_first()
 			if field == 'Availability':
 				data[field] = [label.css("::text").extract_first() for label in line.xpath('.//td/div')]
-			# don't parse these
-			elif field == 'Year of offer'
+			# Don't need  the others!
+			elif field == 'Year of offer':
 				data[field] = value
 		# Parse overview paragraphs
 		data['Info'] = {}
@@ -251,8 +283,9 @@ class SubjectsSpider(scrapy.Spider):
 
 		# follow pagination links to next list of subjects
 		next_page = response.css('span.next a ::attr(href)').extract_first()
-		if next_page[-1] == '4':
-			return
+		# debug end after page g
+		#if next_page[-1] == '4':
+		#	return
 		if next_page is not None:
 			print("Page exhausted. Navigate to", next_page)
 			yield response.follow(next_page, self.parse)
