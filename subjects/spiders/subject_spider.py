@@ -52,21 +52,20 @@ class SubjectsSpider(scrapy.Spider):
 		period_names = [x.strip("\n\t ").split("\xa0")[0][9:] for x in response.css("div h3 ::text").extract()]
 		tables = response.css("table.cyon_table")
 		for i, table in enumerate(tables):
-			print(period_names[i])
 			parts = period_names[i].split("/")
 			# Wondering if it's possible to not have those values ...
 			# parts[1] shows the campus (U = Parkville)
 			if parts[2] != "1":
-				print("DEBUG: Period end not 1  !!")
+				print("DEBUG: Period end not 1  !!", period_names[i])
 
 			sem = parts[3]
 			
 			events = []
 			for row in table.css("tbody tr"):
-				# values within row
-				values = row.css("td ::text").extract()
-				# convert to dictionary
-				event = dict([TT_COL_NAMES[i], values[i]] for i in range(len(TT_COL_NAMES)))
+				# values within row (have to do this in a bizarre order for it to work!)
+				values = [x.css("::text").extract() for x in row.css("td")]
+				# convert to dictionary; preserve blanks and preserve lists
+				event = dict([col, values[i]] for i, col in enumerate(TT_COL_NAMES))
 				event["Subject Name"] = data["Name"]
 				events.append(event)
 			timetable[sem] = events
