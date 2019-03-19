@@ -11,14 +11,15 @@ def parse_element(element):
 	# traverse list (if element is one)
 	ul = element.xpath(".//li")
 	if len(ul) != 0:
-		return {"type" : "list", "val" : ul.css("::text").extract()}
+		vals = [x.strip() for x in ul.css("::text").extract()]
+		return {"type" : "list", "val" : [x for x in vals if x != "\n" and x != ""]}
 	# treat as just text	
 	string = element.xpath("string(.)").extract_first().strip()
 	# TODO: possibly check if it is a "\n" and turn it into a 'None' ?
-	if string == "None" or string == "Nil" or string == "":
-		return None
 	if string == "\n  ":
 		print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+		return None
+	if string in ["None", "Nil", "", "N/A", '\n  ']:
 		return None
 	return {"type" : "text", "val" : string}
 
@@ -26,10 +27,13 @@ def parse_element_with_subject_table(element):
 	# traverse table (if element is one)
 	table = element.xpath(".//tr")
 	if len(table) != 0:
-		current = {"type" : "subj", "val" : []}
+		current = {"type" : "table", "val" : []}
 		for row in table[1:]:
 			# take only the subject code
-			current["val"].append(row.css("td::text").extract_first())
+			x = row.css("td").xpath("string(.)").extract()
+			if len(x) == 0:
+				continue
+			current["val"].append([x[0].strip(), None if len(x) == 1 else x[1].strip()])
 		return current
 	return parse_element(element)
 
@@ -209,15 +213,38 @@ class SubjectsSpider(scrapy.Spider):
 			callback=self.parse_assessment,
 			meta={'data': data}
 		)
-		
+
+	def parse_level(self, level):
+		data = {}
+		words = level.split(" ")
+		if words[0] == 'Study':
+			words[0] = "Study abroad"
+			words.pop(1)
+		data['Degree'] = words[0]
+		other = " ".join(words[1:])
+		data['Work'] = 'Time-based research' if other == 'time-based research' else 'Coursework'
+		if len(other) == 0:
+			# Honours - technically level 4
+			data['Level'] = None
+		elif other[-1] == ")":
+			data['Level'] = int(other[-2])
+		elif other[-1].isnumeric():
+			data['Level'] = int(other[-1])
+		else:
+			data['Level'] = None
+		return data
+
 	def parse_subject(self, response):
 		data = response.meta['data']
 		
 		head = response.css('p.header--course-and-subject__details ::text').extract()
 		infobox = response.css('div.course__overview-box tr')
 
+		# Get 'last updated' from page
+		data['Updated'] = response.css(".last-updated ::text").extract_first()[14:]
+		
 		# Will be "Undergraduate Level #", 
-		data['Level'] = head[0]
+		data.update(self.parse_level(head[0]))
 
 		# Most Subjects ...
 		if len(head) == 3:
@@ -246,8 +273,6 @@ class SubjectsSpider(scrapy.Spider):
 		data['Info']['Overview'] = remove_blanks([x.strip(' \n\r') for x in response.css(".course__overview-wrapper > p").xpath("string(.)").extract()])
 		data['Info']['Learning Outcomes'] = remove_blanks([x.strip(' \n\r,.;') for x in response.css("#learning-outcomes .ticked-list li ::text").extract()])
 		data['Info']['Skills'] = remove_blanks([x.strip(' \n\r,.;') for x in response.css("#generic-skills .ticked-list li ::text").extract()])
-		# Get 'last updated' from page
-		data['Updated'] = response.css(".last-updated ::text").extract_first()[14:]
 
 		self.log(data, "subjt")
 
