@@ -102,3 +102,7 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+archived_subjects.json
+subjects.json
+subjects*.json

@@ -4,13 +4,16 @@ import datetime
 class SubjectsArchiveSpider(scrapy.Spider):
 	name = 'archive-subjects'
 	start_urls = [
-				  'http://archive.handbook.unimelb.edu.au/',
-				  'https://handbook.unimelb.edu.au/2017/subjects',
-				  'https://handbook.unimelb.edu.au/2018/subjects',
-		     	  'https://handbook.unimelb.edu.au/2019/subjects',
+				  'http://archive.handbook.unimelb.edu.au/', # archive
+				  'https://handbook.unimelb.edu.au/2017/subjects', # modern
+				  'https://handbook.unimelb.edu.au/2018/subjects', # modern
+		     	  'https://handbook.unimelb.edu.au/2019/subjects', # modeern
 				 ]
 
 	def parse_page(self, response):
+		"""
+		Parses list of subjects in modern handbook.
+		"""
 		year = response.meta['year']
 		count = response.meta['count']
 		for result in response.css('li.search-results__accordion-item'):
@@ -21,7 +24,7 @@ class SubjectsArchiveSpider(scrapy.Spider):
 			count += 1
 			yield subject
 		
-		# follow pagination links to next list of subjects
+		# Follow pagination links to next list of subjects
 		next_page = response.css('span.next a ::attr(href)').extract_first()
 		if next_page is not None:
 			print("Page exhausted. Navigate to", next_page, "count:", count)
@@ -30,6 +33,9 @@ class SubjectsArchiveSpider(scrapy.Spider):
 			print("Finished parsing {} ({} subjects parsed)".format(year, count))
 
 	def parse_subject_list(self, response):
+		"""
+		Parse archived handbook subject page
+		"""
 		year = int(response.css("h1::text").extract_first()[:4])
 		count = 0
 		for line in response.css("ul li"):
@@ -41,20 +47,28 @@ class SubjectsArchiveSpider(scrapy.Spider):
 			yield subject
 		print("Finished parsing {} ({} subjects parsed)".format(year, count))
 
-	# parses results page, list of subjects
+	# Parse results page, list of subjects
 	def parse(self, response):
+		"""
+		Parse start url -- either modern or archived handbook pages.
+		"""
 		url = response.request.url.split('/')
 
+		# Parsing modern handbook pages.
 		if url[2][:8] == 'handbook':
 			year = int(url[-2])
 			yield response.follow(response.request.url, self.parse_page, meta={'year': year, 'count': 0})
+		# Parsing archived handbook pages.
 		else:
+			# Multiple years on one page -- parse each years' pages.
 			for link in response.css("ul li a"):
 				href = link.css("::attr(href)").extract_first()
 				if "subject" not in href:
 					continue
+				# Parse the subjects of a year.
 				name = link.css("::text").extract_first()
-				if int(name[:4]) <= 2007:
+				year = int(name[:4])
+				if year <= 2007:
 					print("Skipping", name)
 					continue
 				print("Parsing", name, "at", href)
