@@ -1,41 +1,53 @@
 import scrapy	
 import datetime
-
+# Column names within timetable (sws)
 TT_COL_NAMES = ['Class Code', 'Description', 'Day', 'Start', 'Finish', 'Duration', 'Weeks', 'Location', 'Class Dates', 'Start Date']
+CURRENT_YEAR = 2019
+NONE_STR = ["None", "Nil", "", "N/A", '\n']
 
 def remove_blanks(l):
+	"""
+	Removes blank string entries within a list.
+	"""
 	return [x for x in l if x != ""]
 
 def parse_element(element):
 	""" Function can return None, be careful!"""
 	# traverse list (if element is one)
 	ul = element.xpath(".//li")
+
 	if len(ul) != 0:
 		vals = [x.strip() for x in ul.css("::text").extract()]
-		return {"type" : "list", "val" : [x for x in vals if x != "\n" and x != ""]}
+		return {"type" : "list", "val" : NONE_STR}
+
 	# treat as just text	
 	string = element.xpath("string(.)").extract_first().strip()
-	# TODO: possibly check if it is a "\n" and turn it into a 'None' ?
-	if string == "\n  ":
-		print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+
+	if string in NONE_STR:
 		return None
-	if string in ["None", "Nil", "", "N/A", '\n  ']:
-		return None
+
 	return {"type" : "text", "val" : string}
 
 def parse_element_with_subject_table(element):
 	# traverse table (if element is one)
 	table = element.xpath(".//tr")
-	if len(table) != 0:
-		current = {"type" : "table", "val" : []}
-		for row in table[1:]:
-			# take only the subject code
-			x = row.css("td").xpath("string(.)").extract()
-			if len(x) == 0:
-				continue
-			current["val"].append([x[0].strip(), None if len(x) == 1 else x[1].strip()])
-		return current
-	return parse_element(element)
+
+	if len(table) == 0:
+		return parse_element(element)
+
+	current = {"type" : "table", "val" : []}
+
+	for row in table[1:]:
+		# take only the subject code
+		x = row.css("td").xpath("string(.)").extract()
+
+		if len(x) == 0:
+			continue
+
+		current["val"].append([x[0].strip(), None if len(x) == 1 else x[1].strip()])
+
+	return current
+	
 
 class SubjectsSpider(scrapy.Spider):
 	name = 'subjects'
@@ -43,11 +55,9 @@ class SubjectsSpider(scrapy.Spider):
 	parse_count = 0
 	parsed_count = 0
 	total_count = 0
-	period_store = []
 	
 	def log(self, data, step, lv='*'):
 		print("{} [{:4d}/{:4d}/{:4d}] ({}) Parse {:5} ({:4d}) {}  {}".format(datetime.datetime.now().isoformat(' '), self.parsed_count, self.parse_count, self.total_count, lv, step, data['Parse No.'], data['Code'], data['Name']))
-
 
 	def parse_timetable(self, response):
 		data = response.meta['data']
@@ -109,7 +119,7 @@ class SubjectsSpider(scrapy.Spider):
 		self.log(data, "furth")
 
 		yield scrapy.Request(
-			response.urljoin("https://sws.unimelb.edu.au/2019/Reports/List.aspx?objects=" + data['Code'] + "&weeks=1-52&days=1-7&periods=1-56&template=module_by_group_list"),
+			response.urljoin("https://sws.unimelb.edu.au/" + str(CURRENT_YEAR) + "/Reports/List.aspx?objects=" + data['Code'] + "&weeks=1-52&days=1-7&periods=1-56&template=module_by_group_list"),
 			callback=self.parse_timetable,
 			meta={'data': data}
 		)
@@ -214,27 +224,7 @@ class SubjectsSpider(scrapy.Spider):
 			meta={'data': data}
 		)
 
-	def parse_level(self, level):
-		data = {}
-		words = level.split(" ")
-		if words[0] == 'Study':
-			words[0] = "Study abroad"
-			words.pop(1)
-		data['Degree'] = words[0]
-		other = " ".join(words[1:])
-		data['Work'] = 'Time-based research' if other == 'time-based research' else 'Coursework'
-		if len(other) == 0:
-			# Honours - technically level 4
-			data['Level'] = None
-		elif other[-1] == ")":
-			data['Level'] = int(other[-2])
-		elif other[-1].isnumeric():
-			data['Level'] = int(other[-1])
-		else:
-			data['Level'] = None
-		return data
-
-	def parse_subject(self, response):
+	def parse_overview(self, response):
 		data = response.meta['data']
 		
 		head = response.css('p.header--course-and-subject__details ::text').extract()
@@ -244,7 +234,7 @@ class SubjectsSpider(scrapy.Spider):
 		data['Updated'] = response.css(".last-updated ::text").extract_first()[14:]
 		
 		# Will be "Undergraduate Level #", 
-		data.update(self.parse_level(head[0]))
+		data['Level'] = head[0]
 
 		# Most Subjects ...
 		if len(head) == 3:
@@ -253,9 +243,9 @@ class SubjectsSpider(scrapy.Spider):
 		# Doctorate time-based research
 		else:
 			data['Location'] = head[1]
-			# Maximum EFTSL to complete
-			# "Equivalent Full Time Study Load"
-			# TODO: Worry about PhD
+			# TODO: Process further:
+				# Maximum EFTSL to complete
+				# "Equivalent Full Time Study Load"
 			yield data
 			return
 
@@ -286,30 +276,39 @@ class SubjectsSpider(scrapy.Spider):
 		# follow links to subject pages
 		for result in response.css('li.search-results__accordion-item'):
 			self.total_count += 1
-			# skip if subject is not offered.
+			
+			# Don't parse the subject if the subject is not offered this year.
+			# TODO: Parse the subject anyway, for information - ie, why not offered? (10/07/2019)
 			offered = result.css('span.search-results__accordion-detail ::text').extract()[1]
 			if ("Not offered in" in offered):
 				continue
 			self.parse_count += 1
+
+			# Basic information parsed from results page.
 			data = {}
 			data['Item No.'] = self.total_count
 			data['Parse No.'] = self.parse_count
 			data['Name'] = result.css('a.search-results__accordion-title ::text').extract_first()
 			data['Code'] = result.css('span.search-results__accordion-code ::text').extract_first()
 			data['url'] = result.css('a.search-results__accordion-title ::attr(href)').extract_first()
-			self.log(data, "start", '+')
 
+			self.log(data, "start", '+')
+			
+			# Go on to parse subject overview
 			yield scrapy.Request(
 					response.urljoin(data['url']),
-					callback=self.parse_subject,
+					callback=self.parse_overview,
 					meta={'data': data}
 				)
 
-		# follow pagination links to next list of subjects
+		# Follow pagination links to next list of subjects
 		next_page = response.css('span.next a ::attr(href)').extract_first()
-		# debug end after page g
-		#if next_page[-1] == '4':
-		#	return
+
+		# If debugging, end after scraping 3 pages.
+		if DEBUG_SHORT_SCRAPE and next_page[-1] == '4':
+			return
+
+		# Go to next page, if there are any pages left to process.
 		if next_page is not None:
 			print("Page exhausted. Navigate to", next_page)
 			yield response.follow(next_page, self.parse)
